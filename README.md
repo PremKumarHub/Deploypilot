@@ -6,7 +6,7 @@ DeployAI is an intelligent DevOps platform that automates application deployment
 
 ## Features
 
-- ✅ Automated deployment pipeline
+- ✅ Automated deployment pipeline,
 - ✅ AI-powered log analysis
 - ✅ Root cause detection
 - ✅ Fix recommendations
