@@ -1,0 +1,20 @@
+{
+  "name": "deployai-engine",
+  "version": "1.0.0",
+  "description": "DeployAI Deployment Engine",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "simple-git": "^3.20.0",
+    "dockerode": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}

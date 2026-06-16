@@ -1,0 +1,26 @@
+name: DeployAI Deployment
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Trigger Deployment API
+      run: |
+        curl -X POST ${{ secrets.DEPLOYMENT_API_URL }}/deploy \
+          -H "Content-Type: application/json" \
+          -d '{
+            "repo": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}"
+          }' \
+          -H "Authorization: Bearer ${{ secrets.DEPLOYMENT_API_KEY }}"
