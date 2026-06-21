@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16
@@ -22,12 +20,16 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://admin:password@postgres:5432/deployai
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - NODE_ENV=development
     depends_on:
       - postgres
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     volumes:
       - ./backend:/app
       - /app/node_modules
@@ -47,6 +49,26 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+
+  deployment-engine:
+    build:
+      context: ./deployment-engine
+      dockerfile: Dockerfile
+    container_name: deployai-engine
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://admin:password@postgres:5432/deployai
+      - PORT=3002
+    depends_on:
+      - postgres
+    volumes:
+      - ./deployment-engine:/app
+      - /app/node_modules
+      - ./backend:/backend
 
 volumes:
   postgres_data:

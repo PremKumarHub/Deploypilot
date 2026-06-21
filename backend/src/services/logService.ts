@@ -64,35 +64,36 @@ export class LogService {
     
     const totalLogs = await Log.count({ where: whereClause });
     
-    const logsByTypeResult = await Log.findAll({
-      where: whereClause,
-      attributes: ['logType'],
-      group: ['logType']
-    });
-    
     const logsByType: Record<string, number> = {};
-    logsByTypeResult.forEach((log: any) => {
-      logsByType[log.logType] = parseInt(log.count);
-    });
+    const types: ('BUILD' | 'DOCKER' | 'RUNTIME')[] = ['BUILD', 'DOCKER', 'RUNTIME'];
+    
+    for (const type of types) {
+      logsByType[type] = await Log.count({
+        where: {
+          ...whereClause,
+          logType: type
+        }
+      });
+    }
     
     const errorLogs = await Log.count({
       where: {
         ...whereClause,
-        content: { [Op.like]: '%error%' }
+        content: { [Op.iLike]: '%error%' }
       }
     });
     
     const warningLogs = await Log.count({
       where: {
         ...whereClause,
-        content: { [Op.like]: '%warning%' }
+        content: { [Op.iLike]: '%warning%' }
       }
     });
     
     const infoLogs = await Log.count({
       where: {
         ...whereClause,
-        content: { [Op.like]: '%info%' }
+        content: { [Op.iLike]: '%info%' }
       }
     });
     

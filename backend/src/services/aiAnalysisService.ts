@@ -1,195 +1,116 @@
+import axios from 'axios';
 import OpenAI from 'openai';
-import { Analysis, Log } from '../models';
 
-export interface AnalysisRequest {
-  deploymentId: string;
-  logs: Log[];
-}
+export type AIServiceResult = { text: string; provider: 'gemini' | 'openai' | 'local' } | null;
 
-export interface AnalysisResult {
-  rootCause: string;
-  severity: 'LOW' | 'MEDIUM' | 'HIGH';
-  suggestion: string;
-  errorPatterns: string[];
-  performanceMetrics: {
-    buildTime: number;
-    deployTime: number;
-    errorRate: number;
-  };
-}
+const localAnalyze = async (prompt: string): Promise<AIServiceResult> => {
+	// Enhanced rule-based analyzer that returns structured JSON and step-by-step remediation.
+	const lower = prompt.toLowerCase();
+	const lines = prompt.split(/\n+/).map(l => l.trim()).filter(Boolean);
+	const matched: string[] = [];
+	for (const l of lines) {
+		if (/error|failed|npm err|warning|permission denied|eacces|out of memory|oom|docker not available|address already in use|cannot find module/i.test(l)) {
+			matched.push(l);
+		}
+	}
 
-export class AIAnalysisService {
-  private openai: OpenAI;
+	let rootCause = 'No significant errors detected';
+	let severity: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
+	let suggestion = 'Monitor deployment logs for anomalies';
+	let remediationSteps: string[] = [];
 
-  constructor() {
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY || ''
-    });
-  }
+	if (matched.length > 0) {
+		// Prefer the most specific problematic line
+		const firstError = matched[0];
+		rootCause = firstError.length > 300 ? firstError.substring(0, 300) : firstError;
+		const errorCount = (lower.match(/error/g) || []).length + (lower.match(/warning/g) || []).length;
+		severity = errorCount > 3 ? 'HIGH' : 'MEDIUM';
 
-  async analyzeDeployment(request: AnalysisRequest): Promise<AnalysisResult> {
-    const { deploymentId, logs } = request;
+		const err = firstError.toLowerCase();
+		if (err.includes('git clone') || err.includes('failed to clone') || err.includes('repository not found')) {
+			suggestion = 'Repository clone failed. Verify repository URL, access permissions, and network connectivity.';
+			remediationSteps.push('Confirm repo URL: `git ls-remote <repo>`');
+			remediationSteps.push('Check credentials/access token and repo visibility (public/private).');
+			remediationSteps.push('Try cloning locally: `git clone <repo> --branch <branch>`');
+		} else if (err.includes('npm err') || err.includes('npm error') || err.includes('missing script: "test"')) {
+			suggestion = 'Node/npm issue during install or test phase.';
+			remediationSteps.push('Run locally: `npm install` then `npm test` to reproduce the error.');
+			remediationSteps.push('Ensure `package.json` contains required scripts and correct Node version.');
+			remediationSteps.push('If CI uses different Node, add an `.nvmrc` or specify `engines` in `package.json`.');
+		} else if (err.includes('eaddrinuse') || err.includes('address already in use')) {
+			suggestion = 'Port already in use on the host.';
+			remediationSteps.push('Identify process using port: `lsof -i:<port>` or `netstat -tulpn | grep <port>`');
+			remediationSteps.push('Change service port or stop the conflicting process.');
+		} else if (err.includes('docker not available') || (err.includes('docker') && err.includes('not'))) {
+			suggestion = 'Docker operations unavailable on the runner.';
+			remediationSteps.push('Ensure Docker daemon is installed and running on the host.');
+			remediationSteps.push('Check permissions: user may need to be in the `docker` group.');
+		} else if (err.includes('permission denied') || err.includes('eacces')) {
+			suggestion = 'Permission denied during file or command execution.';
+			remediationSteps.push('Check file and directory permissions and ownership.');
+			remediationSteps.push('Avoid running as root where not necessary; update `chmod`/`chown` as appropriate.');
+		} else if (err.includes('out of memory') || err.includes('oom')) {
+			suggestion = 'Out of memory during build or tests.';
+			remediationSteps.push('Increase available memory on the runner or reduce parallelism.');
+			remediationSteps.push('Use swap space or smaller build artifacts.');
+		} else if (/tests failed|test failed|failing tests/i.test(err)) {
+			suggestion = 'Tests failed; inspect failing tests output.';
+			remediationSteps.push('Run tests locally and inspect failure output.');
+			remediationSteps.push('Isolate failing tests and add fixes or flakiness guards.');
+		} else if (/cannot find module|module not found|import error/i.test(err)) {
+			suggestion = 'Module import error; check dependency installations and relative import paths.';
+			remediationSteps.push('Verify `node_modules` presence and run `npm ci`/`npm install`.');
+			remediationSteps.push('Check import paths and TypeScript `baseUrl`/`paths` configuration.');
+		} else {
+			suggestion = 'Review full logs and follow error messages to resolve the issue.';
+			remediationSteps.push('Inspect full deployment logs via the UI or `GET /api/logs/deployment/:deploymentId`.');
+		}
 
-    // Check if OpenAI API key is configured
-    if (!process.env.OPENAI_API_KEY) {
-      return this.getFallbackAnalysis(logs);
-    }
+		if (remediationSteps.length > 0) {
+			suggestion += '\nSuggested actions:\n' + remediationSteps.map((s, i) => `${i+1}. ${s}`).join('\n');
+		}
+	}
 
-    try {
-      // Prepare log summary for AI analysis
-      const logSummary = this.prepareLogSummary(logs);
+	const json = { rootCause, severity, suggestion };
+	return { text: JSON.stringify(json), provider: 'local' };
+};
 
-      // Call OpenAI API for analysis
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a deployment analysis expert. Analyze deployment logs to identify issues, root causes, and provide actionable suggestions.`
-          },
-          {
-            role: 'user',
-            content: `Analyze these deployment logs:\n\n${logSummary}\n\nProvide analysis in JSON format with:
-            - rootCause: Main issue description
-            - severity: LOW, MEDIUM, or HIGH
-            - suggestion: Actionable recommendation
-            - errorPatterns: Array of error patterns found
-            - performanceMetrics: Object with buildTime, deployTime, errorRate`
-          }
-        ],
-        temperature: 0.3,
-        response_format: { type: 'json_object' }
-      });
+export const analyzeWithAI = async (prompt: string): Promise<AIServiceResult> => {
+	const geminiKey = process.env.GEMINI_API_KEY || '';
+	if (geminiKey) {
+		try {
+			const url = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${geminiKey}`;
+			const response = await axios.post(url, { contents: [{ parts: [{ text: prompt }] }] }, { timeout: 20000 });
+			const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+			if (text) return { text, provider: 'gemini' };
+		} catch (e: any) {
+			console.error('[aiAnalysisService] Gemini error', e.message || e);
+		}
+	}
 
-      const analysis = JSON.parse(response.choices[0].message.content || '{}');
-      return this.normalizeAnalysis(analysis);
-    } catch (error) {
-      console.error('OpenAI API error:', error);
-      return this.getFallbackAnalysis(logs);
-    }
-  }
+	const openaiKey = process.env.OPENAI_API_KEY || '';
+	if (openaiKey) {
+		try {
+			const client = new OpenAI({ apiKey: openaiKey });
+			const model = process.env.OPENAI_MODEL || 'gpt-4';
+			const resp: any = await client.chat.completions.create({
+				model,
+				messages: [{ role: 'user', content: prompt }],
+				temperature: 0.2,
+				max_tokens: 1500
+			});
+			const content = resp?.choices?.[0]?.message?.content;
+			if (content) return { text: content, provider: 'openai' };
+		} catch (e: any) {
+			console.error('[aiAnalysisService] OpenAI error', e.message || e);
+		}
+	}
 
-  private prepareLogSummary(logs: Log[]): string {
-    return logs.map(log => {
-      return `[${log.logType}] ${log.content}`;
-    }).join('\n');
-  }
-
-  private normalizeAnalysis(analysis: any): AnalysisResult {
-    return {
-      rootCause: analysis.rootCause || 'Unable to determine root cause',
-      severity: this.normalizeSeverity(analysis.severity),
-      suggestion: analysis.suggestion || 'Review logs manually for issues',
-      errorPatterns: Array.isArray(analysis.errorPatterns) ? analysis.errorPatterns : [],
-      performanceMetrics: {
-        buildTime: analysis.performanceMetrics?.buildTime || 0,
-        deployTime: analysis.performanceMetrics?.deployTime || 0,
-        errorRate: analysis.performanceMetrics?.errorRate || 0
-      }
-    };
-  }
-
-  private normalizeSeverity(severity: string): 'LOW' | 'MEDIUM' | 'HIGH' {
-    const upperSeverity = severity?.toUpperCase();
-    if (upperSeverity === 'LOW' || upperSeverity === 'MEDIUM' || upperSeverity === 'HIGH') {
-      return upperSeverity as 'LOW' | 'MEDIUM' | 'HIGH';
-    }
-    return 'MEDIUM';
-  }
-
-  private getFallbackAnalysis(logs: Log[]): AnalysisResult {
-    const errorLogs = logs.filter(log => 
-      log.content.toLowerCase().includes('error') || 
-      log.content.toLowerCase().includes('failed')
-    );
-    
-    const warningLogs = logs.filter(log => 
-      log.content.toLowerCase().includes('warning')
-    );
-
-    const errorPatterns = this.extractErrorPatterns(logs);
-    
-    return {
-      rootCause: errorLogs.length > 0 
-        ? 'Deployment encountered errors during execution' 
-        : 'Deployment completed without critical errors',
-      severity: errorLogs.length > 3 ? 'HIGH' : errorLogs.length > 0 ? 'MEDIUM' : 'LOW',
-      suggestion: errorLogs.length > 0 
-        ? 'Review error logs and fix identified issues before redeploying' 
-        : 'Monitor deployment metrics for optimization opportunities',
-      errorPatterns,
-      performanceMetrics: {
-        buildTime: this.estimateBuildTime(logs),
-        deployTime: this.estimateDeployTime(logs),
-        errorRate: errorLogs.length / logs.length
-      }
-    };
-  }
-
-  private extractErrorPatterns(logs: Log[]): string[] {
-    const patterns = new Set<string>();
-    
-    logs.forEach(log => {
-      const content = log.content.toLowerCase();
-      
-      if (content.includes('timeout')) patterns.add('Timeout issues');
-      if (content.includes('memory')) patterns.add('Memory issues');
-      if (content.includes('network')) patterns.add('Network connectivity');
-      if (content.includes('permission')) patterns.add('Permission errors');
-      if (content.includes('dependency')) patterns.add('Dependency conflicts');
-      if (content.includes('syntax')) patterns.add('Syntax errors');
-    });
-
-    return Array.from(patterns);
-  }
-
-  private estimateBuildTime(logs: Log[]): number {
-    const buildLogs = logs.filter(log => log.logType === 'BUILD');
-    if (buildLogs.length < 2) return 0;
-    
-    const firstLog = buildLogs[0];
-    const lastLog = buildLogs[buildLogs.length - 1];
-    
-    const timeDiff = new Date(lastLog.timestamp).getTime() - new Date(firstLog.timestamp).getTime();
-    return Math.round(timeDiff / 1000); // Return in seconds
-  }
-
-  private estimateDeployTime(logs: Log[]): number {
-    const deployLogs = logs.filter(log => log.logType === 'DOCKER' || log.logType === 'RUNTIME');
-    if (deployLogs.length < 2) return 0;
-    
-    const firstLog = deployLogs[0];
-    const lastLog = deployLogs[deployLogs.length - 1];
-    
-    const timeDiff = new Date(lastLog.timestamp).getTime() - new Date(firstLog.timestamp).getTime();
-    return Math.round(timeDiff / 1000); // Return in seconds
-  }
-
-  async saveAnalysis(deploymentId: string, result: AnalysisResult): Promise<Analysis> {
-    return await Analysis.create({
-      deploymentId,
-      rootCause: result.rootCause,
-      severity: result.severity,
-      suggestion: result.suggestion,
-      analyzedAt: new Date()
-    });
-  }
-
-  async getAnalysis(deploymentId: string): Promise<Analysis | null> {
-    return await Analysis.findOne({
-      where: { deploymentId }
-    });
-  }
-
-  async analyzeAndSave(deploymentId: string): Promise<AnalysisResult> {
-    const logs = await Log.findAll({
-      where: { deploymentId },
-      order: [['timestamp', 'ASC']]
-    });
-
-    const result = await this.analyzeDeployment({ deploymentId, logs });
-    await this.saveAnalysis(deploymentId, result);
-    
-    return result;
-  }
-}
+	// 3) Local structured fallback (improved over plain-text fallback)
+	try {
+		return await localAnalyze(prompt);
+	} catch (e: any) {
+		console.error('[aiAnalysisService] Local analyze error', e.message || e);
+		return null;
+	}
+};

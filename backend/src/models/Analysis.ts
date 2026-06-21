@@ -7,6 +7,7 @@ class Analysis extends Model {
   public rootCause!: string;
   public severity!: 'LOW' | 'MEDIUM' | 'HIGH';
   public suggestion!: string;
+  public providerUsed?: string;
   public analyzedAt!: Date;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -42,6 +43,11 @@ Analysis.init(
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW,
       field: 'analyzed_at',
+    },
+    providerUsed: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'provider_used',
     },
   },
   {

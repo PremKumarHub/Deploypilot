@@ -1,13 +1,13 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { sequelize } from './models';
 import deploymentRoutes from './routes/deployments';
 import logRoutes from './routes/logs';
 import analysisRoutes from './routes/analysis';
 import userRoutes from './routes/users';
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -34,8 +34,8 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('Database connection established successfully.');
 
-    // Sync database models
-    await sequelize.sync();
+    // Sync database models (apply non-destructive schema changes in dev)
+    await sequelize.sync({ alter: true });
     console.log('Database models synchronized.');
 
     // Start server

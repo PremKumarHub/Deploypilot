@@ -4,9 +4,6 @@ FROM node:18-alpine
 # Set working directory
 WORKDIR /app
 
-# Install git and other build essentials
-RUN apk add --no-cache git openssh
-
 # Copy package files
 COPY package*.json ./
 
@@ -17,7 +14,7 @@ RUN npm install
 COPY . .
 
 # Expose port
-EXPOSE 3001
+EXPOSE 3002
 
 # Start the application with ts-node
 CMD ["npm", "run", "dev"]
